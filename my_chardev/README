@@ -1,0 +1,202 @@
+Пример создания символьного устройства, обработка операции открытия/чтения/записи
+
+Проверка code style:            /usr/src/linux/scripts/checkpatch.pl --no-tree -f my_module.c
+Сборка:                         make
+Загрузка модуля:                sudo insmod my_chardev.ko
+Просмотр вывода:                dmesg | tail -10 (результат вывода pr_info)
+Создаем символьное устройство:  mknod -m 0666 /dev/mydev c 240 0
+Проверяем содержимое:           cat /dev/mydev
+Просмотр вывода:                dmesg | tail -10
+Записываем строку в файл:       echo "hello" >> /dev/mydev
+Просмотр вывода:                dmesg | tail -10
+Выгрузка модуля:                sudo rmmod my_module.ko
+Удаляем символьное устройство:  sudo rm /dev/mydev
+
+Результат выполнения "make":
+===============================================================================
+make -C /lib/modules/4.4.0-34-generic/build M=/home/alex7ky/modules/my_chardev modules
+make[1]: вход в каталог «/usr/src/linux-headers-4.4.0-34-generic»
+  CC [M]  /home/alex7ky/modules/my_chardev/my_chardev.o
+  Building modules, stage 2.
+  MODPOST 1 modules
+  CC      /home/alex7ky/modules/my_chardev/my_chardev.mod.o
+  LD [M]  /home/alex7ky/modules/my_chardev/my_chardev.ko
+make[1]: выход из каталога «/usr/src/linux-headers-4.4.0-34-generic»
+===============================================================================
+
+
+Результата выполнения "/usr/src/linux/scripts/checkpatch.pl --no-tree -f my_module.c":
+===============================================================================
+total: 0 errors, 0 warnings, 30 lines checked
+
+hello-2.c has no obvious style problems and is ready for submission.
+===============================================================================
+
+
+Результат выполнения "dmesg | tail -10":
+===============================================================================
+[14224.142116] Major number 240
+[14224.142123] Please create a device file with
+[14224.142126] 'mknod -m 0666 /dev/mydev c 240 0'.
+===============================================================================
+
+Результат выполнения "demsg | tail -10" после попытки чтения файла "cat /dev/mydev":
+===============================================================================
+[14349.342940] mydevice_open() end!
+[14349.342977] mydevice_release() end!
+===============================================================================
+
+
+Результат выполнения "demsg | tail -10" после записи в файл "echo "hello" >> /dev/mydev":
+===============================================================================
+[14525.510347] mydevice_open() end!
+[14525.510382] hello
+[14525.510386] mydevice_write() end!
+[14525.510395] mydevice_release() end!
+===============================================================================
+
+
+Информация о системе (uname -a):
+===============================================================================
+Linux acer 4.4.0-34-generic #53-Ubuntu SMP Wed Jul 27 16:06:39 UTC 2016 x86_64 x86_64 x86_64 GNU/Linux
+===============================================================================
+
+
+Содержание Makefile:
+===============================================================================
+NF := my_chardev
+obj-m += $(NF).o
+
+KDIR := /lib/modules/$(shell uname -r)/build
+PWD := $(shell pwd)
+
+default:
+	$(MAKE) -C $(KDIR) M=$(PWD) modules
+clean:
+	rm modules.order Module.symvers $(NF).ko $(NF).mod.c $(NF).mod.o $(NF).o \
+	.$(NF).ko.cmd .$(NF).mod.o.cmd .$(NF).o.cmd -R .tmp_versions
+===============================================================================
+
+
+Содержание файла my_chardev.c: 
+===============================================================================
+# include <linux/module.h>
+# include <linux/kernel.h>
+# include <linux/proc_fs.h>
+# include <asm/uaccess.h>
+# include <linux/slab.h>
+
+#define DRIVER_AUTHOR "Alexandr Stolpovsky <stolpovsky7@yandex.ru>"
+#define DRIVER_DESC   "A sample driver"
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR(DRIVER_AUTHOR);
+
+static int init_my_chardev(void);
+static void cleanup_my_chardev(void);
+static int mydevice_open(struct inode *, struct file *);
+static int mydevice_release(struct inode *, struct file *);
+static ssize_t mydevice_read(struct file *, char *, size_t, loff_t *);
+static ssize_t mydevice_write(struct file *, const char *, size_t, loff_t *);
+
+# define SUCCES 0
+# define DEVICE_NAME "mydev"
+# define BUF_LEN 20
+
+static dev_t Major;
+static int Device_Status;
+static char msg[BUF_LEN];
+static char *msg_Ptr;
+
+static const struct file_operations fops = {
+	.open = mydevice_open,
+	.release = mydevice_release,
+	.read = mydevice_read,
+	.write = mydevice_write
+};
+
+static int init_my_chardev(void)
+{
+	Major = register_chrdev(0, DEVICE_NAME, &fops);
+
+	if (Major < 0) {
+		pr_info("register_chrdev() error %d\n", Major);
+		return Major;
+	}
+	pr_info("Major number %d\n", Major);
+	pr_info("Please create a device file with\n");
+	pr_info("'mknod /dev/mydev c %d 0'.\n", Major);
+
+	return SUCCES;
+}
+
+static void cleanup_my_chardev(void)
+{
+	unregister_chrdev(Major, DEVICE_NAME);
+}
+
+static int mydevice_open(struct inode *inode, struct file *file)
+{
+	if (Device_Status)
+		return -EBUSY;
+
+	Device_Status++;
+	msg_Ptr = msg;
+	try_module_get(THIS_MODULE);
+	pr_info("mydevice_open() end!\n");
+
+	return SUCCES;
+}
+
+static int mydevice_release(struct inode *inode, struct file *file)
+{
+	Device_Status--;
+	module_put(THIS_MODULE);
+	pr_info("mydevice_release() end!\n");
+
+	return SUCCES;
+}
+
+static ssize_t
+mydevice_read(struct file *filp, char *buffer, size_t length, loff_t *offset)
+{
+	int bytes_read = 0;
+
+	if (*msg_Ptr == 0)
+		return 0;
+
+	while (length && *msg_Ptr) {
+		put_user(*(msg_Ptr++), buffer++);
+		length--;
+		bytes_read++;
+	}
+	pr_info("mydevice_read() end!\n");
+
+	return bytes_read;
+}
+
+
+static ssize_t mydevice_write(struct file *file, const char __user *buffer,
+	size_t len, loff_t *off)
+{
+	int bwrite;
+
+	for (bwrite = 0; bwrite < len && bwrite < BUF_LEN; bwrite++)
+		get_user(msg[bwrite], buffer + bwrite);
+
+	msg_Ptr = msg;
+	pr_info("%s", msg);
+	pr_info("mydevice_write() end!\n");
+
+	return bwrite;
+}
+
+module_init(init_my_chardev);
+module_exit(cleanup_my_chardev);
+
+MODULE_LICENSE("GPL v2");
+MODULE_AUTHOR(DRIVER_AUTHOR);
+MODULE_DESCRIPTION(DRIVER_DESC);
+MODULE_SUPPORTED_DEVICE("testdevice");
+
+===============================================================================
