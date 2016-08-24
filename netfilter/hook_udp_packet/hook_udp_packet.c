@@ -1,12 +1,14 @@
 #include "include/drop_packet.h"
+#include <net/udp.h>
 
 unsigned int hook_packet_udp(void *priv,
 	struct sk_buff *skb,
 	const struct nf_hook_state *state)
 {
 
-	struct iphdr *ip_header;
-	struct udphdr *udp_header;
+	static struct iphdr *ip_header;
+	static struct udphdr *udp_header;
+	static long int udp_len;
 
 	/* Проверяем что это IP пакет */
 	if (skb->protocol == htons(ETH_P_IP)) {
@@ -24,8 +26,18 @@ unsigned int hook_packet_udp(void *priv,
 			 */
 
 			if (udp_header->dest == htons(32001)) {
+				pr_info("origin_checksum = %d\n", udp_header->check);
+
 				pr_info("port chenged!\n");
 				udp_header->dest = htons(32002);
+				udp_len = skb->len - (ip_hdr(skb)->ihl * 4);
+				udp_header->check = 0;
+				udp_header->check = csum_tcpudp_magic(ip_header->saddr,
+                                                      ip_header->daddr,
+                                                      udp_len,
+                                                      IPPROTO_UDP,
+                                                      csum_partial((char *)udp_header, udp_len, 0));
+				pr_info("changed_checksum = %d\n", udp_header->check);
 			}
 		}
 	}
